@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environment
+.venv/
+
+# Secrets and local configuration
+.env
+
+# Runtime data: local database and venue exports
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Tooling caches
+.pytest_cache/
+.coverage
+
+# macOS
+.DS_Store

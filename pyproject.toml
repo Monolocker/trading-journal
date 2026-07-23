@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradejournal"
+description = "Read-only trade journal reconciling delta-neutral perpetual futures positions across Hyperliquid and Variational."
+readme = "README.md"
+requires-python = ">=3.12"
+dynamic = ["version"]
+dependencies = [
+    "requests>=2.32",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "tradejournal.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Puts src/ on sys.path for the test session, so tradejournal is importable 
+# w/o installing the project
+pythonpath = ["src"]
+addopts = "-ra"
