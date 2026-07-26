@@ -228,7 +228,9 @@ class Repository:
                 raw_payload, ingested_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (venue, venue_event_id) DO NOTHING
+            ON CONFLICT (venue, venue_event_id)
+                WHERE venue_event_id IS NOT NULL
+                DO NOTHING
             """,
             (
                 cash_flow.trade_id,

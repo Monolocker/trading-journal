@@ -68,6 +68,7 @@ class CashFlow:
     trade_id: int | None = None
     venue_event_id: str | None = None
     venue_symbol: str | None = None
+    symbol: str | None = None
     leg_id: int | None = None
     ingested_at: datetime | None = None
     id: int | None = None
