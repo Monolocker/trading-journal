@@ -1,0 +1,29 @@
+{
+    "_comment": "Symbol normalisation cases. Hyperliquid entries reflect verified naming conventions. Variational entries are provisional and are confirmed against a real export in Milestone 5.",
+    "hyperliquid_valid": [
+      { "venue_symbol": "BTC", "canonical": "BTC-PERP" },
+      { "venue_symbol": "ETH", "canonical": "ETH-PERP" },
+      { "venue_symbol": "SOL", "canonical": "SOL-PERP" },
+      { "venue_symbol": "HYPE", "canonical": "HYPE-PERP" },
+      { "venue_symbol": "kPEPE", "canonical": "KPEPE-PERP" },
+      { "venue_symbol": "kBONK", "canonical": "KBONK-PERP" }
+    ],
+    "hyperliquid_rejected": [
+      { "venue_symbol": "PURR/USDC", "reason": "spot pair" },
+      { "venue_symbol": "@107", "reason": "spot index" },
+      { "venue_symbol": "somedex:COIN", "reason": "separator present" },
+      { "venue_symbol": "BTC PERP", "reason": "whitespace inside name" },
+      { "venue_symbol": "", "reason": "empty" }
+    ],
+    "variational_valid": [
+      { "venue_symbol": "BTC-USD", "canonical": "BTC-PERP" },
+      { "venue_symbol": "ETH-USDC", "canonical": "ETH-PERP" },
+      { "venue_symbol": "SOL-PERP", "canonical": "SOL-PERP" },
+      { "venue_symbol": "btc-usd", "canonical": "BTC-PERP" },
+      { "venue_symbol": "HYPE", "canonical": "HYPE-PERP" }
+    ],
+    "variational_rejected": [
+      { "venue_symbol": "BTC-USD-241231", "reason": "dated expiry, not a perpetual" },
+      { "venue_symbol": "", "reason": "empty" }
+    ]
+  }

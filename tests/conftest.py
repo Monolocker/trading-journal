@@ -6,11 +6,13 @@ tests never share state and never touch a real journal.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import json
+import sqlite3
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-import sqlite3
+from typing import Any
 
 import pytest
 
@@ -23,6 +25,25 @@ from tradejournal.domain.enums import (
     Venue,
 )
 from tradejournal.domain.models import CashFlow, Fill
+
+FIXTURES_DIRECTORY = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(scope="session")
+def load_fixture() -> Callable[[str], Any]:
+    """Return a loader for JSON files in tests/fixtures.
+
+    Adapter tests in later milestones use saved venue responses rather than
+    live API calls, and this is how they read them.
+    """
+
+    def load(name: str) -> Any:
+        path = FIXTURES_DIRECTORY / name
+        if not path.exists():
+            raise FileNotFoundError(f"No such fixture: {path}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    return load
 
 
 @pytest.fixture
