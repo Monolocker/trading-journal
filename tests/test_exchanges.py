@@ -40,9 +40,12 @@ from tradejournal.exchanges.normalized import (
 )
 from tradejournal.exchanges.symbols import (
     SymbolNormalizationError,
+    base_asset,
     is_canonical,
+    market_namespace,
     normalize_hyperliquid_symbol,
     normalize_variational_symbol,
+    split_canonical,
     to_canonical,
 )
 
@@ -123,6 +126,82 @@ def test_canonical_form_helpers() -> None:
 
 def test_surrounding_whitespace_is_tolerated() -> None:
     assert normalize_hyperliquid_symbol("  BTC  ") == "BTC-PERP"
+
+
+# ----------------------------------------------------------------------
+# HIP-3 builder-deployed markets
+# ----------------------------------------------------------------------
+
+
+def test_hip3_symbols_from_fixture(load_fixture) -> None:
+    for case in load_fixture("symbols.json")["hyperliquid_hip3_valid"]:
+        assert (
+            normalize_hyperliquid_symbol(case["venue_symbol"])
+            == case["canonical"]
+        )
+
+
+def test_hip3_market_does_not_collide_with_primary_dex() -> None:
+    """xyz:BTC and BTC are different markets and must stay different.
+
+    Separate order book, separate deployer-run oracle, separate funding.
+    Collapsing them would make leg reconstruction merge fills from two
+    unrelated positions into one leg.
+    """
+    assert normalize_hyperliquid_symbol("xyz:BTC") == "XYZ:BTC-PERP"
+    assert normalize_hyperliquid_symbol("BTC") == "BTC-PERP"
+    assert normalize_hyperliquid_symbol("xyz:BTC") != normalize_hyperliquid_symbol("BTC")
+
+
+def test_two_dexes_listing_the_same_asset_stay_distinct() -> None:
+    assert normalize_hyperliquid_symbol("xyz:AAPL") != normalize_hyperliquid_symbol(
+        "abc:AAPL"
+    )
+
+
+def test_equity_ticker_with_a_dot_is_accepted() -> None:
+    """Deployers choose HIP-3 asset names; equities are not all plain letters."""
+    assert normalize_hyperliquid_symbol("xyz:BRK.B") == "XYZ:BRK.B-PERP"
+
+
+def test_namespace_case_is_normalised() -> None:
+    assert normalize_hyperliquid_symbol("xyz:AAPL") == normalize_hyperliquid_symbol(
+        "XYZ:AAPL"
+    )
+
+
+def test_base_asset_ignores_the_namespace() -> None:
+    """This is what lets a HIP-3 leg pair with a plain leg on another venue."""
+    assert base_asset("XYZ:AAPL-PERP") == "AAPL"
+    assert base_asset("AAPL-PERP") == "AAPL"
+    assert base_asset("XYZ:AAPL-PERP") == base_asset("AAPL-PERP")
+
+
+def test_market_namespace_is_reported() -> None:
+    assert market_namespace("XYZ:AAPL-PERP") == "XYZ"
+    assert market_namespace("BTC-PERP") is None
+
+
+def test_split_canonical_rejects_a_raw_venue_symbol() -> None:
+    """Guards against passing an unnormalised name into pairing logic."""
+    with pytest.raises(SymbolNormalizationError):
+        split_canonical("xyz:AAPL")
+
+
+def test_namespaced_canonical_form_is_recognised() -> None:
+    assert is_canonical("XYZ:AAPL-PERP")
+    assert not is_canonical("xyz:AAPL-PERP")
+    assert not is_canonical("XYZ:AAPL")
+
+
+def test_to_canonical_accepts_an_explicit_namespace() -> None:
+    assert to_canonical("aapl", namespace="xyz") == "XYZ:AAPL-PERP"
+
+
+def test_variational_rejects_a_namespace_rather_than_guessing() -> None:
+    """No evidence exists that this venue uses namespaces; do not invent one."""
+    with pytest.raises(SymbolNormalizationError):
+        normalize_variational_symbol("xyz:AAPL")
 
 
 # ----------------------------------------------------------------------
