@@ -180,8 +180,7 @@ def _check_timestamp_range(
         )
     if moment > reference + FUTURE_TOLERANCE:
         raise EventParsingError(
-            f"{field_name}: {moment.isoformat()} is far in the "
-            f"future"
+            f"{field_name}: {moment.isoformat()} is far in the future"
         )
 
 
