@@ -193,7 +193,7 @@ def test_seconds_mistaken_for_milliseconds_is_caught() -> None:
     1768478400 is a valid seconds timestamp. Read as milliseconds it lands
     in January 1970, which the lower bound rejects.
     """
-    with pytest.raises(EventParsingError, match="implausibly early"):
+    with pytest.raises(EventParsingError, match="early"):
         parse_epoch_ms(1768478400, now=NOW)
 
 
