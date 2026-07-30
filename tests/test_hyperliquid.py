@@ -31,6 +31,7 @@ from tradejournal.exchanges.hyperliquid import (
     validate_account_address,
 )
 from tradejournal.exchanges.normalized import to_cash_flow, to_fill
+from tradejournal.exchanges.symbols import normalize_hyperliquid_symbol
 
 ACCOUNT = "0x31ca8395cf837de08b24da3f660e77761dfb974b"
 
@@ -273,8 +274,8 @@ def test_unsupported_market_is_skipped_and_recorded(fills_payload) -> None:
     assert client.skipped_events[0].data_type == "fills"
 
 
-def test_hip3_market_is_skipped_rather_than_confused_with_a_main_market() -> None:
-    """A dex-prefixed HIP-3 asset must not normalise onto the base market."""
+def test_hip3_market_is_ingested_with_its_dex_namespace() -> None:
+    """HIP-3 builder-deployed markets are traded and must be journalled."""
     entry = {
         "coin": "xyz:XYZ100",
         "px": "25372.0",
@@ -287,9 +288,24 @@ def test_hip3_market_is_skipped_rather_than_confused_with_a_main_market() -> Non
         "feeToken": "USDC",
     }
     client = build_client(StubSession(StubResponse(200, [entry])))
-    assert client.fetch_fills() == []
-    assert len(client.skipped_events) == 1
+    fills = client.fetch_fills()
 
+    assert len(fills) == 1
+    assert fills[0].symbol == "XYZ:XYZ100-PERP"
+    assert fills[0].venue_symbol == "xyz:XYZ100"
+    assert client.skipped_events == []
+
+def test_namespaced_market_does_not_collide_with_primary_dex() -> None:
+    """Some HIP-3 deployers list the same assets as the primary dex.
+
+    hyna is one such dex. A namespaced market is a different market
+    consisting of separate order book, separate funding, etc..
+    Collapsing the two would make leg reconstruction merge fills from
+    unrelated positions into one leg.
+    """
+    assert normalize_hyperliquid_symbol("hyna:BTC") == "HYNA:BTC-PERP"
+    assert normalize_hyperliquid_symbol("BTC") == "BTC-PERP"
+    assert normalize_hyperliquid_symbol("hyna:BTC") != normalize_hyperliquid_symbol("BTC")
 
 def test_mapped_fill_persists_end_to_end(repository, fills_payload) -> None:
     """The adapter, the boundary and the database agree on every type."""
@@ -375,7 +391,11 @@ def test_overlapping_pages_are_deduplicated_by_trade_id() -> None:
             "tid": 3, "feeToken": "USDC",
         },
     ]
-    session = StubSession(StubResponse(200, page), StubResponse(200, overlap))
+    session = StubSession(
+        StubResponse(200, page), 
+        StubResponse(200, overlap),
+        StubResponse(200, []),
+        )
     fills = build_client(session, page_limit=2).fetch_fills()
 
     assert [fill.venue_fill_id for fill in fills] == ["1", "2", "3"]
