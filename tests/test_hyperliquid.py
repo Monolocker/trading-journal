@@ -736,3 +736,195 @@ def test_live_read_only_access() -> None:
     for position in positions:
         assert position.quantity > 0
         assert position.symbol.endswith("-PERP")
+
+
+# ----------------------------------------------------------------------
+# Per-dex position queries
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def xyz_state_payload(load_fixture) -> dict[str, Any]:
+    return load_fixture("hyperliquid_clearinghouse_state_xyz.json")
+
+
+def test_default_client_queries_only_the_native_dex(state_payload) -> None:
+    session = StubSession(StubResponse(200, state_payload))
+    client = build_client(session)
+
+    assert client.perp_dexes == ("",)
+    client.fetch_open_positions()
+    assert len(session.requests) == 1
+
+
+def test_native_request_omits_the_dex_field(state_payload) -> None:
+    """Matches the documented default form exactly."""
+    session = StubSession(StubResponse(200, state_payload))
+    build_client(session).fetch_open_positions()
+    assert "dex" not in session.requests[0]
+
+
+def test_configured_dex_is_sent_in_its_own_request(
+    state_payload, xyz_state_payload
+) -> None:
+    session = StubSession(
+        StubResponse(200, state_payload), StubResponse(200, xyz_state_payload)
+    )
+    build_client(session, perp_dexes=("", "xyz")).fetch_open_positions()
+
+    assert len(session.requests) == 2
+    assert "dex" not in session.requests[0]
+    assert session.requests[1]["dex"] == "xyz"
+    assert session.requests[1]["type"] == "clearinghouseState"
+
+
+def test_positions_are_merged_across_dexes(
+    state_payload, xyz_state_payload
+) -> None:
+    """Without this, HIP-3 legs would look closed on the exchange."""
+    session = StubSession(
+        StubResponse(200, state_payload), StubResponse(200, xyz_state_payload)
+    )
+    positions = build_client(
+        session, perp_dexes=("", "xyz")
+    ).fetch_open_positions()
+
+    assert {position.symbol for position in positions} == {
+        "BTC-PERP",
+        "ETH-PERP",
+        "XYZ:AAPL-PERP",
+        "XYZ:TSLA-PERP",
+    }
+
+
+def test_hip3_position_direction_and_size(xyz_state_payload) -> None:
+    positions = build_client(
+        StubSession(StubResponse(200, xyz_state_payload)),
+        perp_dexes=("xyz",),
+    ).fetch_open_positions()
+
+    by_symbol = {position.symbol: position for position in positions}
+    assert by_symbol["XYZ:AAPL-PERP"].direction is Direction.LONG
+    assert by_symbol["XYZ:AAPL-PERP"].quantity == Decimal("5.0")
+    assert by_symbol["XYZ:TSLA-PERP"].direction is Direction.SHORT
+    assert by_symbol["XYZ:TSLA-PERP"].quantity == Decimal("2.0")
+
+
+def test_prefixed_coin_is_not_double_qualified(xyz_state_payload) -> None:
+    positions = build_client(
+        StubSession(StubResponse(200, xyz_state_payload)),
+        perp_dexes=("xyz",),
+    ).fetch_open_positions()
+    assert positions[0].venue_symbol == "xyz:AAPL"
+    assert "xyz:xyz:" not in positions[0].symbol.lower()
+
+
+def test_bare_coin_is_qualified_with_the_queried_dex() -> None:
+    """It is undocumented whether a per-dex response repeats the prefix.
+
+    A position that normalised differently from its own fills would look
+    orphaned and missing at the same time, so both shapes must converge.
+    """
+    payload = {
+        "assetPositions": [
+            {
+                "position": {
+                    "coin": "AAPL",
+                    "entryPx": "241.37",
+                    "szi": "5.0",
+                },
+                "type": "oneWay",
+            }
+        ],
+        "time": 1768824000000,
+    }
+    positions = build_client(
+        StubSession(StubResponse(200, payload)), perp_dexes=("xyz",)
+    ).fetch_open_positions()
+
+    assert positions[0].symbol == "XYZ:AAPL-PERP"
+    assert positions[0].raw_payload["position"]["coin"] == "AAPL"
+
+
+def test_failure_on_one_dex_raises_rather_than_returning_partial(
+    state_payload,
+) -> None:
+    """A partial view would read as 'the exchange closed your leg'."""
+    session = StubSession(
+        StubResponse(200, state_payload), StubResponse(422)
+    )
+    with pytest.raises(HyperliquidRequestError):
+        build_client(session, perp_dexes=("", "xyz")).fetch_open_positions()
+
+
+def test_duplicate_dexes_are_queried_once(state_payload) -> None:
+    session = StubSession(StubResponse(200, state_payload))
+    client = build_client(session, perp_dexes=("", "xyz", "xyz", ""))
+
+    assert client.perp_dexes == ("", "xyz")
+
+
+def test_bare_string_perp_dexes_is_rejected() -> None:
+    """'xyz' would otherwise iterate into three single-character dexes."""
+    with pytest.raises(ValueError, match="sequence"):
+        build_client(StubSession(StubResponse(200, [])), perp_dexes="xyz")
+
+
+@pytest.mark.parametrize(
+    "perp_dexes", [(), ("toolongdexname",), ("xy z",), (None,), ("xyz:",)]
+)
+def test_invalid_perp_dexes_are_rejected(perp_dexes: Any) -> None:
+    with pytest.raises(ValueError):
+        build_client(StubSession(StubResponse(200, [])), perp_dexes=perp_dexes)
+
+
+# ----------------------------------------------------------------------
+# Per-dex collateral asset
+# ----------------------------------------------------------------------
+
+
+def test_funding_defaults_to_usdc(funding_payload) -> None:
+    flows = build_client(
+        StubSession(StubResponse(200, funding_payload))
+    ).fetch_cash_flows()
+    assert all(flow.asset == "USDC" for flow in flows)
+
+
+def test_hip3_funding_uses_the_configured_collateral_asset() -> None:
+    """HIP-3 deployers declare their own quote assets.
+
+    TESTUSD is deliberately fictional. This tests for override mechanics.
+    """
+    payload = [
+        {
+            "time": 1768478400000,
+            "hash": "0x" + "0" * 64,
+            "delta": {
+                "type": "funding",
+                "coin": "xyz:AAPL",
+                "usdc": "-1.25",
+                "szi": "5.0",
+                "fundingRate": "0.0000125",
+            },
+        }
+    ]
+    flows = build_client(
+        StubSession(StubResponse(200, payload)),
+        perp_dexes=("", "xyz"),
+        dex_collateral_assets={"xyz": "TESTUSD"},
+    ).fetch_cash_flows()
+
+    assert flows[0].symbol == "XYZ:AAPL-PERP"
+    assert flows[0].asset == "TESTUSD"
+    assert flows[0].amount == Decimal("-1.25")
+
+
+def test_native_funding_is_unaffected_by_a_dex_override(
+    funding_payload,
+) -> None:
+    flows = build_client(
+        StubSession(StubResponse(200, funding_payload)),
+        perp_dexes=("", "xyz"),
+        dex_collateral_assets={"xyz": "TESTUSD"},
+    ).fetch_cash_flows()
+    assert all(flow.asset == "USDC" for flow in flows)

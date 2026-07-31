@@ -55,7 +55,7 @@ from __future__ import annotations
 import logging
 import re
 import time as time_module
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -81,7 +81,9 @@ from tradejournal.exchanges.normalized import (
     require_mapping,
 )
 from tradejournal.exchanges.symbols import (
+    NAMESPACE_SEPARATOR,
     SymbolNormalizationError,
+    market_namespace,
     normalize_hyperliquid_symbol,
 )
 
@@ -112,8 +114,17 @@ MAX_PAGES = 200
 # incorrect request only consumes rate limit.
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
+# clearinghouseState's dex field defaults to the empty string, which the
+# official documentation describes as the first perp dex.
+NATIVE_PERP_DEX = ""
+
+DEFAULT_COLLATERAL_ASSET = "USDC"
+
+
 _ADDRESS_PATTERN = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
+
+_DEX_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]{1,8}$")
 
 class HyperliquidError(Exception):
     """Base class for every failure raised by this adapter."""
@@ -173,6 +184,39 @@ def validate_account_address(address: str) -> str:
         )
     return candidate
 
+def validate_perp_dexes(perp_dexes: Sequence[str]) -> tuple[str, ...]:
+    """Validate and de-duplicate the perp dexes the HL client will query.
+    Empty string = default which represents first (native) perp dex, per
+    HL docs on clearinghouseState. HIP-3 deployers are validated but not
+    checked for existence, nonexistent dex already surfaces an API error.
+    """
+
+    if isinstance(perp_dexes, str):
+        raise ValueError(
+            "perp_dexes must be a sequence "
+            "Pass ('', 'xyz') rather than 'xyz."
+        )
+    
+    validated: list[str] = []
+    for dex in perp_dexes:
+        if not isinstance(dex, str):
+            raise ValueError(
+                f"Perp dex name must be a string, got {type(dex).__name__}."
+            )
+        if dex != NATIVE_PERP_DEX and not _DEX_NAME_PATTERN.match(dex):
+            raise ValueError(
+                f"Perp dex name {dex!r} must be 1 to 8 alphanumeric "
+                f"characters, or the empty string fo the native dex"
+            )
+        if dex not in validated:
+            validated.append(dex)
+
+    if not validated:
+        raise ValueError(
+            "perp_dexes must name at least one dex; pass ('',) for the "
+            "native perp dex only."
+        )
+    return tuple(validated)
 
 class HyperliquidClient:
     """Read-only client for one Hyperliquid account.
@@ -196,6 +240,8 @@ class HyperliquidClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
         page_limit: int = FILLS_PAGE_LIMIT,
+        perp_dexes: Sequence[str] = (NATIVE_PERP_DEX,),
+        dex_collateral_assets: Mapping[str: str] | None = None,
         sleep: Callable[[float], None] = time_module.sleep,
     ) -> None:
         self.account_address = validate_account_address(account_address)
@@ -204,6 +250,11 @@ class HyperliquidClient:
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
         self.page_limit = page_limit
+        self.perp_dexes = validate_perp_dexes(perp_dexes)
+        self.dex_collateral_assets = {
+            (name.upper() if name else NATIVE_PERP_DEX): asset
+            for name, asset in (dex_collateral_assets or {}).items()
+        }
         self.skipped_events: list[SkippedEvent] = []
 
         self._sleep = sleep
@@ -516,7 +567,52 @@ class HyperliquidClient:
             key=lambda flow: (flow.timestamp, flow.venue_event_id or "")
         )
         self._warn_if_empty(collected, "funding")
+        self._note_dexes_without_funding(collected)
         return collected
+    
+    def _collateral_asset_for(self, symbol: str) -> str:
+        """Return the settlement asset for a market's funding payments.
+        
+         Every HIP-3 dex declares its own collateral token. In the case
+         of hyna, it is USDE. A configured override of funding payload's field 
+         ('usdc') wins, everything else falls back on USDC.
+        """
+        namespace = market_namespace(symbol)
+        key = NATIVE_PERP_DEX if namespace is None else namespace.upper()
+        return self.dex_collateral_assets.get(key, DEFAULT_COLLATERAL_ASSET)
+    
+    def _note_dexes_without_funding(
+        self, collected: Sequence[NormalizedCashFlow]
+    ) -> None:
+        """Note a configured HIP-3 dex that returned no funding events.
+
+        Holding no position on a dex produces the same silence as a
+        missing per-dex query would, so this is informational rather than
+        a warning. It exists so that the difference is visible at all.
+        """
+        configured = {
+            dex.upper() for dex in self.perp_dexes if dex != NATIVE_PERP_DEX
+        }
+        if not configured:
+            return
+
+        seen = {
+            namespace
+            for namespace in (
+                market_namespace(flow.symbol)
+                for flow in collected
+                if flow.symbol is not None
+            )
+            if namespace is not None
+        }
+        for dex in sorted(configured - seen):
+            LOGGER.info(
+                "no funding events returned for perp dex %s; expected if no "
+                "position was held there, but if one was, userFunding may "
+                "require a per-dex query",
+                dex,
+                extra={"account": redact_address(self.account_address)},
+            )
 
     def _to_funding_cash_flow(
         self, element: object
@@ -569,7 +665,7 @@ class HyperliquidClient:
                 timestamp=timestamp,
                 type=CashFlowType.FUNDING,
                 amount=amount,
-                asset="USDC",
+                asset=self._collateral_asset_for(symbol),
                 funding_rate=parse_optional_decimal(
                     delta.get("fundingRate"), field_name="fundingRate"
                 ),
@@ -579,45 +675,88 @@ class HyperliquidClient:
             self._skip(
                 "cash_flows", str(error), venue_symbol=str(venue_symbol)
             )
-            return None
+            return None 
 
     # ------------------------------------------------------------------
     # Positions
     # ------------------------------------------------------------------
 
     def fetch_open_positions(self) -> Sequence[NormalizedPosition]:
-        """Return the account's current perpetual positions.
+        """Return the account's current perpetual positions across
+        configured HIP-3 market deployers.
 
-        Used to detect a position the exchange holds that the journal does
+        A client configured for the native dex alone reports no positions 
+        for HIP-3 market deployers. Trading HIP-3 markets requires a request
+        for that specific deployer.
+
+        Used to detect a position the dex holds that the journal does
         not know about, and the reverse.
         """
-        payload = self._post(
-            {"type": "clearinghouseState", "user": self.account_address},
-            context="clearinghouseState",
-        )
+        collected: list[NormalizedPosition] = []
+        for dex in self.perp_dexes:
+            collected.extend(self._fetch_positions_for_dex(dex))
+        return collected
+    
+    def _fetch_positions_for_dex(self, dex: str) -> list[NormalizedPosition]:
+        label = dex or "native"
+        body: dict[str, Any] = {
+            "type": "clearinghouseState",
+            "user": self.account_address
+        }
+        # Omitted rather than sent as an empty string for the native dex,
+        # so the request matches the document default format
+        if dex != NATIVE_PERP_DEX:
+            body["dex"] = dex
+
+        payload = self._post(body, context=f"clearinghouseState[{label}]")
+        context = f"clearinghouseState[{label}]"
+
         try:
-            state = require_mapping(payload, field_name="clearinghouseState")
+            state = require_mapping(payload, field_name=context)
             asset_positions = require_field(
-                state, "assetPositions", context="clearinghouseState"
+                state, "assetPositions", context=context
             )
         except EventParsingError as error:
-            raise HyperliquidResponseError(
-                f"clearinghouseState: {error}"
-            ) from None
-
+            raise HyperliquidResponseError(str(error)) from None
+        
         if not isinstance(asset_positions, list):
             raise HyperliquidResponseError(
-                "clearinghouseState: assetPositions was not a JSON array"
+                f"{context}: assetPositions was not a JSON array"
             )
-
+        
         collected: list[NormalizedPosition] = []
         for element in asset_positions:
-            normalized = self._to_position(element)
+            normalized = self._to_position(element, dex)
             if normalized is not None:
                 collected.append(normalized)
         return collected
 
-    def _to_position(self, element: object) -> NormalizedPosition | None:
+
+    @staticmethod
+    def _qualify_coin(coin: object, dex: str) -> object:
+        """Ensure builder-deployed market carries its 
+        respective dex prefix
+
+        Fills arrive in {dex}:{coin} format. Uncertain if 
+        clearinghouseState response scoped to one deployer would
+        repeat the prefix or return bare asset 
+
+        Instead of depending on this uncertainty, a bare name
+        is qualified with the dex that was actually queried, which 
+        the HL client picks up. A name that already carries a separator
+        is untouched.
+        """ 
+
+        if dex == NATIVE_PERP_DEX or not isinstance(coin, str):
+            return coin
+        if NAMESPACE_SEPARATOR in coin:
+            return coin
+        return f"{dex}{NAMESPACE_SEPARATOR}{coin}"
+
+    
+    def _to_position(
+        self, element: object, dex: str
+    ) -> NormalizedPosition | None:
         try:
             wrapper = require_mapping(element, field_name="assetPosition")
             position = require_mapping(
@@ -628,7 +767,10 @@ class HyperliquidClient:
             self._skip("positions", str(error))
             return None
 
-        venue_symbol = position.get("coin")
+        # venue_symbol holds the venue-format name including any dex
+        # prefix. raw_payload still preserves exactly what was returned.
+        venue_symbol = self._qualify_coin(position.get("coin"), dex)
+
         try:
             symbol = normalize_hyperliquid_symbol(venue_symbol)
         except SymbolNormalizationError as error:

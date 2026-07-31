@@ -1,0 +1,59 @@
+{
+    "assetPositions": [
+      {
+        "position": {
+          "coin": "xyz:AAPL",
+          "cumFunding": {
+            "allTime": "12.4",
+            "sinceChange": "0.0",
+            "sinceOpen": "2.1"
+          },
+          "entryPx": "241.37",
+          "leverage": { "rawUsd": "-1206.85", "type": "isolated", "value": 5 },
+          "liquidationPx": "196.42",
+          "marginUsed": "241.37",
+          "maxLeverage": 10,
+          "positionValue": "1213.65",
+          "returnOnEquity": "0.0281",
+          "szi": "5.0",
+          "unrealizedPnl": "6.8"
+        },
+        "type": "oneWay"
+      },
+      {
+        "position": {
+          "coin": "xyz:TSLA",
+          "cumFunding": {
+            "allTime": "-4.2",
+            "sinceChange": "0.0",
+            "sinceOpen": "-1.1"
+          },
+          "entryPx": "412.05",
+          "leverage": { "rawUsd": "824.1", "type": "isolated", "value": 4 },
+          "liquidationPx": "498.9",
+          "marginUsed": "206.02",
+          "maxLeverage": 10,
+          "positionValue": "820.3",
+          "returnOnEquity": "0.0092",
+          "szi": "-2.0",
+          "unrealizedPnl": "3.8"
+        },
+        "type": "oneWay"
+      }
+    ],
+    "crossMaintenanceMarginUsed": "0.0",
+    "crossMarginSummary": {
+      "accountValue": "0.0",
+      "totalMarginUsed": "0.0",
+      "totalNtlPos": "0.0",
+      "totalRawUsd": "0.0"
+    },
+    "marginSummary": {
+      "accountValue": "2044.75",
+      "totalMarginUsed": "447.39",
+      "totalNtlPos": "2033.95",
+      "totalRawUsd": "10.8"
+    },
+    "time": 1768824000000,
+    "withdrawable": "1597.36"
+  }
