@@ -46,6 +46,21 @@ FUTURE_TOLERANCE = timedelta(days=2)
 class EventParsingError(ValueError):
     """Raised when a venue response cannot be parsed safely."""
 
+@dataclass(frozen=True, slots=True)
+class SkippedEvent:
+    """An event this adapter could not normalise and chose not to guess at.
+
+    Recorded rather than discarded so that synchronisation can surface it
+    as an alert. Silently dropping an event the journal does not
+    understand is precisely the failure mode this project is built to
+    avoid.
+    """
+
+    data_type: str
+    reason: str
+    venue_symbol: str | None = None
+    venue_event_id: str | None = None
+
 
 # --------------------------------------------------------------------------
 # Parsing rules for untrusted API values
