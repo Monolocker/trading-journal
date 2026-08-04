@@ -8,6 +8,7 @@ rows follow the officially documented export columns exactly.
 from __future__ import annotations
 
 import csv
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -223,6 +224,76 @@ def test_liquidation_is_ingested_as_a_fill(import_dir: Path) -> None:
     assert fills[0].raw_payload["trade_type"] == "liquidation"
     assert fills[0].side is Side.SELL
 
+def test_rwa_perpetual_is_ingested_as_a_fill(import_dir: Path) -> None:
+    """RWA perps are in scope alongside crypto perps; the
+    instrument_type survives in raw_payload so reconciliation can still
+    distinguish the two."""
+    write_csv(
+        import_dir / TRADES_SUBDIRECTORY / "trades.csv",
+        TRADES_HEADER,
+        [
+            trade_row(
+                id="t-rwa",
+                instrument_type="perpetual_rwa_future",
+                underlying="XAU",
+                price="2400.5",
+                qty="1.5",
+            )
+        ],
+    )
+    client = make_client(import_dir)
+    fills = list(client.fetch_fills())
+
+    assert client.skipped_events == []
+    assert len(fills) == 1
+    fill = fills[0]
+    assert fill.venue_symbol == "XAU"
+    assert fill.symbol == "XAU-PERP"
+    assert fill.raw_payload["instrument_type"] == "perpetual_rwa_future"
+
+
+def test_skips_are_logged_as_one_summary_line_per_file(
+    import_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Hundreds of skipped rows != hundreds of log lines:
+    each file with skips gets exactly one warning with a count, while
+    the per-row reasons remain on skipped_events."""
+    write_csv(
+        import_dir / TRADES_SUBDIRECTORY / "a-trades.csv",
+        TRADES_HEADER,
+        [
+            trade_row(id="t-ok"),
+            trade_row(id="t-bad-1", instrument_type="option"),
+            trade_row(id="t-bad-2", status="failed"),
+            trade_row(id="t-bad-3", side="hold"),
+        ],
+    )
+    write_csv(
+        import_dir / TRADES_SUBDIRECTORY / "b-trades.csv",
+        TRADES_HEADER,
+        [trade_row(id="t-bad-4", qty="0")],
+    )
+    client = make_client(import_dir)
+    with caplog.at_level(
+        logging.WARNING, logger="tradejournal.exchanges.variational"
+    ):
+        fills = list(client.fetch_fills())
+
+    assert [fill.venue_fill_id for fill in fills] == ["t-ok"]
+    assert len(client.skipped_events) == 4
+
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and record.name == "tradejournal.exchanges.variational"
+    ]
+    assert len(warnings) == 2
+    messages = sorted(record.getMessage() for record in warnings)
+    assert "a-trades.csv" in messages[0]
+    assert "3 fills row(s) skipped" in messages[0]
+    assert "b-trades.csv" in messages[1]
+    assert "1 fills row(s) skipped" in messages[1]
 
 def test_failed_and_non_perp_and_bad_rows_are_skipped(
     import_dir: Path,

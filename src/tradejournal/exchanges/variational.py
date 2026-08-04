@@ -85,6 +85,7 @@ from __future__ import annotations
 import csv
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from datetime import datetime
 from decimal import Decimal
@@ -144,7 +145,12 @@ TRANSFERS_REQUIRED_COLUMNS = frozenset(
     }
 )
 
-PERPETUAL_INSTRUMENT_TYPE = "perpetual_future"
+ACCEPTED_INSTRUMENT_TYPES = frozenset(
+    {
+        "perpetual_future",
+        "perpetual_rwa_future",
+    }
+)
 CONFIRMED_STATUS = "confirmed"
 
 # Omni settles and denominates in USDC per its documentation, and the
@@ -259,19 +265,23 @@ class VariationalFileClient:
         """
         fills: dict[str, NormalizedFill] = {}
         seen_rows: dict[str, dict[str, str]] = {}
+        skips_by_file: Counter[str] = Counter()
 
         for path, row in self._rows(
             TRADES_SUBDIRECTORY, TRADES_REQUIRED_COLUMNS
         ):
             fill = self._to_fill(row, source=path.name)
             if fill is None:
+                skips_by_file[path.name] += 1
                 continue
             if not self._first_occurrence(
                 "fills", fill.venue_fill_id, row, seen_rows
             ):
+                skips_by_file[path.name] += 1
                 continue
             fills[fill.venue_fill_id] = fill
-
+        
+        self._log_skip_summary("fills", skips_by_file)
         selected = [
             fill
             for fill in fills.values()
@@ -299,7 +309,7 @@ class VariationalFileClient:
             return None
 
         instrument = (row.get("instrument_type") or "").strip()
-        if instrument != PERPETUAL_INSTRUMENT_TYPE:
+        if instrument not in ACCEPTED_INSTRUMENT_TYPES:
             self._skip(
                 "fills",
                 f"{source}: instrument_type {instrument!r} is out of scope",
@@ -389,21 +399,25 @@ class VariationalFileClient:
         after `since`, oldest first."""
         flows: dict[str, NormalizedCashFlow] = {}
         seen_rows: dict[str, dict[str, str]] = {}
+        skips_by_file: Counter[str] = Counter()
 
         for path, row in self._rows(
             TRANSFERS_SUBDIRECTORY, TRANSFERS_REQUIRED_COLUMNS
         ):
             flow = self._to_cash_flow(row, source=path.name)
             if flow is None:
+                skips_by_file[path.name] += 1
                 continue
             if flow.venue_event_id is None:
                 continue
             if not self._first_occurrence(
                 "cash_flows", flow.venue_event_id, row, seen_rows
             ):
+                skips_by_file[path.name] += 1
                 continue
             flows[flow.venue_event_id] = flow
 
+        self._log_skip_summary("cash_flows", skips_by_file)
         selected = [
             flow
             for flow in flows.values()
@@ -625,14 +639,18 @@ class VariationalFileClient:
                 venue_event_id=venue_event_id,
             )
         )
-        LOGGER.warning(
-            "variational row skipped",
-            extra={
-                "data_type": data_type,
-                "reason": reason,
-                "venue_symbol": venue_symbol,
-            },
-        )
+    def _log_skip_summary(
+            self, data_type: str, skips_by_file: Counter[str]
+    ) -> None:
+        """One warning per file with a count, instead of one per row"""
+        for file_name, count in sorted(skips_by_file.items()):
+            LOGGER.warning(
+                "variational import: %s %d %s row(s) skipped; inspect "
+                "skipped_events for the per-row reasons",
+                file_name,
+                count,
+                data_type,
+            )
 
     def _warn_if_empty(
         self, collected: Sequence[object], label: str, subdirectory: str
