@@ -6,6 +6,32 @@ normalized event into its domain model, inserts it through the
 repository's idempotent insert methods, and advances a per-venue,
 per-data-type cursor — all inside one transaction per stream.
 
+Important Notes: 
+- Idempotency: Running a sync twice, or over an overlapping window,
+changes nothing the second time. This is acheived by: 
+    - DB refuses duplicates
+    - `since` is inclusive (stored as last_timestamp), resuming from a stored 
+    cursor re-fetches the events on the boundary
+    - A cash flow w/o a venue_event_id is never inserted. A row the db cannot 
+    recognize a repeat would duplicate on every subsequent sync. Both exchange 
+    clients (adapters) always provide an id. Any such event is reported for 
+    review
+
+- The cursor: Each stream (one venue, one data type) syncs inside one txn.
+    - Every insert and cursor upsert commit or roll back together. Thus, 
+    the cursor never progresses past events in the db that were not durably stored
+    - A crash mid-sync leaves the previous cursor in place, and the next run 
+    re-fetches the same window.
+    - The cursor advances only when the fetch returned events 
+
+- Skipped events do not block the cursor: The respective exchange clients have 
+SkippedEvents functionality. If the clients cannot confidently normalize a row, 
+they will not guess. 
+    - The cursor still advances past such rows as re-fetching would fail the 
+    parse again, resulting in a never-ending loop
+    - Trade-off: a skipped row is not retried automatically. Rather, it is logged 
+    in the SyncReport, so that the fix is a human decision. 
+
 Fills and cash flows are independent streams with independent cursors
 and independent transactions, so a failure in one does not undo the
 other.

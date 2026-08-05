@@ -11,6 +11,7 @@ what allows overlapping synchronisation windows to be replayed safely.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 
 from tradejournal.db.connection import (
     datetime_to_epoch_ms,
@@ -208,6 +209,71 @@ class Repository:
         ).fetchone()
         return int(count)
 
+
+    # Reconstruction Support
+    # ----------------------
+    # Legs and trades are derived data: every one of their vlaues must be 
+    # reproducible from the immutable fills. These methods exist for the 
+    # reconciliation service's rebuild cycle, which wipes and rebuilds 
+    # them wholesale rather than editing them incrementally
+
+    def wipe_derived_tables(self) -> None:
+        """Delete every leg and trade
+        
+        Deleting legs sets fills.leg_id and cash_flows.leg_id to NULL.
+        Deleting trades sets cash_flows.trade_id to NULL. 
+        Fills and cash flows are never touched directly;
+        they are the fact a rebuild starts from 
+        """
+        self._connection.execute("DELETE FROM legs")
+        self._connection.execute("DELETE FROM trades")
+
+    def all_fills_ordered(self) -> list[Fill]:
+        """Every fill, grouped by market and ordered by execution time"""
+        rows = self._connection.execute(
+            "SELECT * FROM fills ORDER BY venue, symbol, timestamp, id"
+        ).fetchall()
+        return [self._row_to_fill(row) for row in rows]
+    
+    def assign_fills_to_leg(
+            self, leg_id: int, fill_ids: Sequence[int]
+    ) -> None:
+        self._connection.executemany(
+            "UPDATE fills SET leg_id = ? WHERE id = ?",
+            [(leg_id, fill_id) for fill_id in fill_ids],
+        )
+
+    def set_leg_trade(self, leg_id: int, trade_id: int) -> None:
+        now = datetime_to_epoch_ms(utc_now())
+        self._connection_execute(
+            "UPDATE legs SET trade_id = ?, updated_at = ?, WHERE id = ?",
+            (trade_id, now, leg_id),
+        )
+
+    def all_legs(self) -> list[Leg]:
+        rows = self._connection.execute(
+            "SELECT * FORM legs ORDER BY opened_at, id"
+        ).fetchall()
+        return [self._row_to_leg(row) for row in rows]
+    
+    def unpaired_legs(self) -> list[Leg]:
+        """Legs w/o a trade: each one is reconciliation finding."""
+        rows = self._connection.execute(
+            "SELECT * FROM legs WHERE trade_id IS NULL ORDER BY opened_at, id"
+        ).fetchall()
+        return [self._row_to_leg(row) for row in rows]
+    
+    def count_legs(self) -> int:
+        (count,) = self._connection.execute(
+            "SELECT COUNT(*) FROM legs"
+        ).fetchone()
+        return int(count)
+    
+    def count_trades(self) -> int:
+        (count,) = self._connection.execute(
+            "SELECT COUNT(*) FROM trades"
+        ).fetchone()
+        return int(count)
 
 
     # Cash flows

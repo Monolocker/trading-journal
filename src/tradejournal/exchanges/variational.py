@@ -53,7 +53,7 @@ means money left the account.
     realized_pnl    passed through signed
     funding         passed through signed -- see the caveat below
 
-Trading fees are ZERO on this venue, and the trades CSV has no fee
+Variational has zero trading fees, the trades CSV has no fee
 column, so every fill is normalised with fee = 0. Unlike Hyperliquid,
 where fees ride on the fill, any Variational fee arrives as a separate
 'fee' transfer event. PnL code must respect both conventions and count
