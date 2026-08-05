@@ -245,14 +245,14 @@ class Repository:
 
     def set_leg_trade(self, leg_id: int, trade_id: int) -> None:
         now = datetime_to_epoch_ms(utc_now())
-        self._connection_execute(
-            "UPDATE legs SET trade_id = ?, updated_at = ?, WHERE id = ?",
+        self._connection.execute(
+            "UPDATE legs SET trade_id = ?, updated_at = ? WHERE id = ?",
             (trade_id, now, leg_id),
         )
 
     def all_legs(self) -> list[Leg]:
         rows = self._connection.execute(
-            "SELECT * FORM legs ORDER BY opened_at, id"
+            "SELECT * FROM legs ORDER BY opened_at, id"
         ).fetchall()
         return [self._row_to_leg(row) for row in rows]
     
