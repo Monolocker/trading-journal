@@ -519,6 +519,11 @@ def test_protocol_accepts_a_conforming_object() -> None:
     class StubClient:
         venue = Venue.HYPERLIQUID
 
+        def __init__(self) -> None:
+            # Part of the contract since M6: sync service reads 
+            # skipped events venue-agnostically
+            self.skipped_events: list = []
+
         def fetch_fills(self, since=None):
             return []
 

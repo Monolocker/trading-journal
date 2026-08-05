@@ -27,6 +27,7 @@ from tradejournal.exchanges.normalized import (
     NormalizedCashFlow,
     NormalizedFill,
     NormalizedPosition,
+    SkippedEvent,
 )
 
 
@@ -35,6 +36,9 @@ class ReadOnlyExchangeClient(Protocol):
     """A read-only source of trading history for one venue."""
 
     venue: Venue
+    
+    # Every row the adapter declined to normalize, in encounter order
+    skipped_events: list[SkippedEvent]
 
     def fetch_fills(
         self, since: datetime | None = None
