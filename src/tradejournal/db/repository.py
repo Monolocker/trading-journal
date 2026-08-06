@@ -391,7 +391,7 @@ class Repository:
         rows = self._connection.execute(
             "SELECT * FROM trades ORDER BY opened_at, id"
         ).fetchall()
-        return [self._row_to_cash_flow(row) for row in rows]
+        return [self._row_to_trade(row) for row in rows]
     
     def update_trade_financials(
         self,
