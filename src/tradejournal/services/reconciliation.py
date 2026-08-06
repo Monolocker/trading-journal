@@ -8,7 +8,8 @@ incremental one — see "Rebuild, not update" below.
 Leg reconstruction
 ------------------
 Fills for one (venue, symbol) market are replayed oldest-first while
-tracking the running signed position (buys add, sells subtract):
+tracking the running signed position (buys add, sells subtract, in the 
+case of scaling in/out):
 
 - A leg OPENS when the position leaves zero; its direction is the sign
   of that first move.

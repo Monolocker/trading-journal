@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from decimal import Decimal
 
 from tradejournal.db.connection import (
     datetime_to_epoch_ms,
@@ -215,7 +216,7 @@ class Repository:
     # Legs and trades are derived data: every one of their vlaues must be 
     # reproducible from the immutable fills. These methods exist for the 
     # reconciliation service's rebuild cycle, which wipes and rebuilds 
-    # them wholesale rather than editing them incrementally
+    # them in totality rather than editing them incrementally
 
     def wipe_derived_tables(self) -> None:
         """Delete every leg and trade
@@ -340,7 +341,95 @@ class Repository:
         ).fetchone()
         return int(count)
 
+    # Attribution and valuation support
+    # ---------------------------------
+    # Every monetary field within a trade is dervied from the respective exchange
+    # Otherwise, fields are recomputed from the immutable fills and cash flows, 
+    # never edited by hand
 
+    def all_cash_flows_ordered(self) -> list[CashFlow]:
+        rows = self._connection.execute(
+            "SELECT * FROM cash_flows ORDER BY timestamp, id"
+        ).fetchall()
+        return [self._row_to_cash_flow(row) for row in rows]
+
+    def clear_cash_flow_assignments(self) -> None: 
+        """Detach every cash flow from its leg and trade.
+
+        Upon recomputing cash flow attributions, the start point
+        is a clean slate. The cash flow primary keys are untouched.
+        Only the two derived foreign keys are cleared.
+        """
+        self._connection.execute(
+            "UPDATE cash_flows SET leg_id = NULL, trade_id = NULL"
+        )
+
+    def assign_cash_flow(
+            self, cash_flow_id: int, *, leg_id: int, trade_id: int | None
+    ) -> None: 
+        self._connection.execute(
+            "UPDATE cash_flows SET leg_id = ?, trade_id = ? WHERE id = ?",
+            (leg_id, trade_id, cash_flow_id),
+        )
+
+    def cash_flows_for_trade(self, trade_id: int) -> list[CashFlow]:
+        rows = self._connection.execute(
+            "SELECT * FROM cash_flows WHERE trade_id = ? " 
+            "ORDER BY timestamp, id",
+            (trade_id,),
+        ).fetchall()
+        return [self._row_to_cash_flow(row) for row in rows]
+    
+    def unattributed_cash_flows(self) -> list[CashFlow]:
+        rows = self._connection.execute(
+            "SELECT * FROM cash_flows WHERE leg_id is NULL " 
+            "ORDER BY timestamp, id",
+        ).fetchall()
+        return [self._row_to_cash_flow(row) for row in rows]
+    
+    def all_trades(self) -> list[Trade]:
+        rows = self._connection.execute(
+            "SELECT * FROM trades ORDER BY opened_at, id"
+        ).fetchall()
+        return [self._row_to_cash_flow(row) for row in rows]
+    
+    def update_trade_financials(
+        self,
+        trade_id: int,
+        *,
+        actual_funding_pnl: Decimal | None,
+        trading_pnl: Decimal | None,
+        fees: Decimal | None,
+        slippage_cost: Decimal | None,
+        net_pnl: Decimal | None,
+        reconciliation_status: ReconciliationStatus,
+        reasoning: str | None,
+    ) -> None:
+        self._connection.execute(
+            """
+            UPDATE trades SET
+                actual_funding_pnl    = ?,
+                trading_pnl           = ?,
+                fees                  = ?,
+                slippage_cost         = ?,
+                net_pnl               = ?,
+                reconciliation_status = ?,
+                reasoning             = ?,
+                updated_at            = ?
+            WHERE id = ?
+            """,
+            (
+                optional_decimal_to_text(actual_funding_pnl),
+                optional_decimal_to_text(trading_pnl),
+                optional_decimal_to_text(fees),
+                optional_decimal_to_text(slippage_cost),
+                optional_decimal_to_text(net_pnl),
+                str(reconciliation_status),
+                reasoning,
+                datetime_to_epoch_ms(utc_now()),
+                trade_id,
+            ),
+        )
 
     # Sync state
     # ----------
