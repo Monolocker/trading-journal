@@ -39,7 +39,7 @@ class Settings:
     database_path: Path
     hyperliquid_account_address: str | None
     hyperliquid_info_url: str
-    variational_import_dir: str
+    variational_import_dir: Path
     http_timeout_seconds: float
     http_max_retries: int
     log_level: str
@@ -49,7 +49,7 @@ class Settings:
         if not self.hyperliquid_account_address: 
             raise ConfigError(
                 "TJ_HYPERLIQUID_ACCOUNT_ADDRESS is not set. Set it to your "
-                "PUBLIC master address (42-character hex). Empty results for "
+                "PUBLIC master account address (42-character hex). Empty results for "
                 "agent/API wallet addresses. No private key ever needed."
             )
         return self.hyperliquid_account_address
@@ -88,7 +88,7 @@ def load_settings(
             env_file = Path(".env")
         if env_file.is_file():
             _seed_from_env_file(env_file)
-    environ = dict(os.environ)
+        environ = dict(os.environ)
 
     address = environ.get("TJ_HYPERLIQUID_ACCOUNT_ADDRESS", "").strip()
     if address == PLACEHOLDER_ADDRESS:

@@ -37,6 +37,37 @@ BASE_TIME = datetime(2026, 7, 1, 12, 0, 0, tzinfo=UTC)
 
 _COUNTER = iter(range(1, 10_000))
 
+TJ_VARIABLES = (
+    "TJ_DATABASE_PATH",
+    "TJ_HYPERLIQUID_ACCOUNT_ADDRESS",
+    "TJ_HYPERLIQUID_INFO_URL",
+    "TJ_VARIATIONAL_IMPORT_DIR",
+    "TJ_HTTP_TIMEOUT_SECONDS",
+    "TJ_HTTP_MAX_RETRIES",
+    "TJ_LOG_LEVEL",
+)
+
+@pytest.fixture(autouse=True)
+def isolated_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cut every CLI test off from the developer's real configuration.
+
+    load_settings() seeds from ./.env relative to the working directory,
+    so a test that merely deletes an environment variable gets it handed
+    straight back by the real .env sitting in the project root — and a
+    test meant to assert "no address configured" would instead reach the
+    live network using the developer's own account. Running each test in
+    an empty temporary directory removes the file from reach, and
+    clearing the variables removes anything exported by the shell.
+
+    Without this, the suite passes or fails depending on whose machine
+    it runs on, which makes it worthless as a check.
+    """
+    monkeypatch.chdir(tmp_path)
+    for name in TJ_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
 
 # ----------------------------------------------------------------------
 # Configuration
