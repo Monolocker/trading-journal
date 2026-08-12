@@ -21,13 +21,13 @@ def configure_logging(level: str = "INFO", *, quiet: bool = False) -> None:
     root.addHandler(handler)
     root.setLevel(resolved)
 
-    def _level_for(level: str) -> int:
-        resolved = logging.getLevelNamesMapping().get(level.strip().upper())
-        if resolved is None:
-            # Unrecognized level should not abort a run
-            # INFO is the safe middle and fallback is announced
-            logging.getLogger(__name__).warning(
-                "unknown log level %r; falling back to INFO", level
-            )
-            return logging.INFO
-        return resolved
+def _level_for(level: str) -> int:
+    resolved = logging.getLevelNamesMapping().get(level.strip().upper())
+    if resolved is None:
+        # Unrecognized level should not abort a run
+        # INFO is the safe middle and fallback is announced
+        logging.getLogger(__name__).warning(
+            "unknown log level %r; falling back to INFO", level
+        )
+        return logging.INFO
+    return resolved
