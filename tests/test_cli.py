@@ -47,6 +47,7 @@ TJ_VARIABLES = (
     "TJ_LOG_LEVEL",
 )
 
+
 @pytest.fixture(autouse=True)
 def isolated_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -88,7 +89,9 @@ def test_placeholder_address_is_treated_as_unset() -> None:
         {"TJ_HYPERLIQUID_ACCOUNT_ADDRESS": PLACEHOLDER_ADDRESS}
     )
     assert settings.hyperliquid_account_address is None
-    with pytest.raises(ConfigError, match="PUBLIC master account"):
+    with pytest.raises(
+        ConfigError, match="TJ_HYPERLIQUID_ACCOUNT_ADDRESS"
+    ):
         settings.require_hyperliquid_address()
 
 
@@ -395,3 +398,90 @@ def test_money_formatting_distinguishes_none_from_zero() -> None:
 
     assert _money(None) == "-"
     assert _money(Decimal("0")) == "0.00"
+
+
+# ----------------------------------------------------------------------
+# refresh, and staleness detection
+# ----------------------------------------------------------------------
+
+
+def test_refresh_syncs_rebuilds_and_reports_in_one_pass(
+    database: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import_dir = tmp_path / "variational"
+    (import_dir / "trades").mkdir(parents=True)
+    (import_dir / "transfers").mkdir(parents=True)
+    (import_dir / "trades" / "t.csv").write_text(
+        "id,created_at,side,instrument_type,underlying,price,qty,"
+        "trade_type,status,liquidation_trigger_price\n"
+        "t-1,2026-07-01T12:00:00Z,buy,perpetual_future,BTC,100,1,"
+        "trade,confirmed,\n"
+        "t-2,2026-07-01T18:00:00Z,sell,perpetual_future,BTC,104,1,"
+        "trade,confirmed,\n",
+        encoding="utf-8",
+    )
+    (import_dir / "transfers" / "x.csv").write_text(
+        "id,created_at,qty,asset,transfer_type,status,underlying,"
+        "instrument_type,fee_type,funding_rate\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TJ_VARIATIONAL_IMPORT_DIR", str(import_dir))
+
+    assert run(database, "refresh", "--venue", "variational") == 0
+    out = capsys.readouterr().out
+    # All three phases ran, in order, from one command.
+    assert "inserted=2" in out
+    assert "legs:" in out
+    assert "TRADE JOURNAL" in out
+    # Having just rebuilt, nothing can be stale.
+    assert "OUT OF DATE" not in out
+
+
+def test_refresh_no_report_stops_after_rebuilding(
+    database: Path, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("TJ_VARIATIONAL_IMPORT_DIR", str(tmp_path / "gone"))
+    seed_hedged_trade(database)
+    assert run(database, "refresh", "--no-report") == 0
+    out = capsys.readouterr().out
+    assert "legs:" in out
+    assert "TRADE JOURNAL" not in out
+
+
+def test_refresh_does_not_report_when_sync_fails(
+    database: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Figures from a half-ingested window would be worse than none."""
+    monkeypatch.setenv(
+        "TJ_VARIATIONAL_IMPORT_DIR", str(tmp_path / "missing")
+    )
+    assert run(database, "refresh", "--venue", "variational") == 2
+    captured = capsys.readouterr()
+    assert "not found" in captured.err
+    assert "TRADE JOURNAL" not in captured.out
+    assert "legs:" not in captured.out
+
+
+def test_report_warns_when_fills_have_not_been_rebuilt(
+    database: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Synced-but-unreconciled fills make every figure below them stale;
+    the report must say so rather than look complete."""
+    seed_hedged_trade(database)
+    assert run(database, "report") == 0
+    out = capsys.readouterr().out
+    assert "OUT OF DATE" in out
+    assert "4 fills have been synced but not reconciled" in out
+
+
+def test_report_stops_warning_once_rebuilt(
+    database: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seed_hedged_trade(database)
+    run(database, "rebuild")
+    capsys.readouterr()
+    assert run(database, "report") == 0
+    assert "OUT OF DATE" not in capsys.readouterr().out
