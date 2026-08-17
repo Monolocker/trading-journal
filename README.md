@@ -88,13 +88,13 @@ Global flags: `--quiet` (silence diagnostics), `--version`.
 
 ## How it Works
 ```mermaid
-flowchart TD
-     A[Venue adapters] --> B[Normalized events];
-     B --> C[SyncService];
-     C --> D[(SQLite fills, cash_flows)];
-     D --> E[ReconciliationService];
-     E --> F[PnLService];
-     F --> G[CLI report]:
+graph TD
+    A[Venue adapters] --> B[Normalized events];
+    B --> C[SyncService];
+    C --> D[(SQLite fills, cash_flows)];
+    D --> E[ReconciliationService];
+    E --> F[PnLService];
+    F --> G[CLI report]:
 ```
 
 **Adapters** (`exchanges/`) translate each venue's format into the same normalized events for tradejournal readability. `HyperliquidClient` reads the public `info` endpoint, while `VariationalClient` reads exported CSVs (manual step). Both satisfy the `ReadOnlyExchangeClient` protocol, so everything downstream is venue agnostic.
